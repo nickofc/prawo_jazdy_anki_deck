@@ -22,7 +22,7 @@ static async Task Start(Options options)
         .Where(x => x.Categories.Any(y => options.Categories.Contains(y)))
         .ToArray();
 
-    var converter = new ItemToAnkiConverter(options.DeckName);
+    var converter = new ItemToAnkiConverter(options);
     await using var stream = await converter.Convert(selectedQuestions);
     await using var fileStream = new FileStream(apkgFullPath, FileMode.Create);
     await stream.CopyToAsync(fileStream);

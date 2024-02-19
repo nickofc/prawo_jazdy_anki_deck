@@ -6,11 +6,11 @@ namespace Prawko;
 
 public class ItemToAnkiConverter
 {
-    private readonly string _deckName;
+    private readonly Options _options;
 
-    public ItemToAnkiConverter(string deckName)
+    public ItemToAnkiConverter(Options options)
     {
-        _deckName = deckName;
+        _options = options;
     }
 
     public async Task<Stream> Convert(IReadOnlyList<Question> questions)
@@ -20,8 +20,8 @@ public class ItemToAnkiConverter
         var noteType = GetAnkiNoteType();
 
         var noteTypeId = collection.CreateNoteType(noteType);
-        var deckId = collection.CreateDeck(_deckName);
-        
+        var deckId = collection.CreateDeck(_options.DeckName);
+
         foreach (var question in questions)
         {
             var (front, back) = Convert(question);
@@ -33,11 +33,11 @@ public class ItemToAnkiConverter
         memoryStream.Position = 0;
         return memoryStream;
     }
-    
+
     private AnkiNoteType GetAnkiNoteType()
     {
         return new AnkiNoteType(
-            name: $"Basic_{_deckName}",
+            name: $"Basic_{_options.DeckName}",
             cardTypes:
             [
                 new AnkiCardType(
@@ -53,6 +53,8 @@ public class ItemToAnkiConverter
 
     private (string front, string back) Convert(Question question)
     {
+        // TODO: zrobić ładną formatkę
+
         var sb = new StringBuilder();
 
         sb.AppendLine("<div>");
@@ -69,13 +71,20 @@ public class ItemToAnkiConverter
             }
             else if (isVideo)
             {
-                sb.AppendLine($"[sound:{question.MediaName.Replace(".wmv", 
-                    ".mp4", StringComparison.InvariantCultureIgnoreCase)}]");
+                if (string.IsNullOrEmpty(_options.OverrideVideoFileExtension))
+                {
+                    sb.AppendLine($"[sound:{question.MediaName}]");
+                }
+                else
+                {
+                    sb.AppendLine($"[sound:{question.MediaName.Replace(".wmv",
+                        $"{_options.OverrideVideoFileExtension}", StringComparison.InvariantCultureIgnoreCase)}]");
+                }
             }
         }
 
         // TODO: testy ABC powinny zmieniać kolejność!
-        
+
         if (!string.IsNullOrEmpty(question.AnswerA))
         {
             sb.AppendLine($"<p><strong>A</strong>: {question.AnswerA}</p>");
