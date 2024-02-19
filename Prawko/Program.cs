@@ -1,97 +1,83 @@
-﻿using Prawko;
+﻿using CommandLine;
+using Prawko;
 
-const string dataPath = @"C:\Users\Damian\Desktop\data";
+await Parser.Default.ParseArguments<Options>(args)
+    .WithParsedAsync(Start);
 
-var skipLines = 1;
-var resourcesPath = Path.Combine(dataPath, "resources");
-var databasePath = Path.Combine(dataPath, "database.tsv");
-
-var lineNo = 1;
-
-var lines = await File.ReadAllLinesAsync(databasePath);
-var items = lines
-    .Skip(skipLines)
-    .Select(line =>
-    {
-        try
-        {
-            var values = line.Split("\t");
-
-            var item = new Item
-            {
-                QuestionId = int.Parse(values[1]),
-                Question = values[2],
-                AnswerA = values[3],
-                AnswerB = values[4],
-                AnswerC = values[5],
-                Answer = values[6],
-                MediaName = values[7],
-                Category = values[8].Split(',')
-            };
-
-            return item;
-        }
-        catch (Exception)
-        {
-            Console.WriteLine($"Unable to parse line: {line}");
-            return null;
-        }
-        finally
-        {
-            lineNo++;
-        }
-    }).Where(x => x != null).ToArray();
-
-var missing = GetMissingResources(items!, resourcesPath);
-Console.WriteLine($"Found missing files {missing.Count}!! These will be skipped.");
-
-var exports = new List<(string DeckName, IReadOnlyCollection<string> Category, string FileName)>
+static async Task Start(Options options)
 {
-    new("Prawo jazdy - kategoria B - mp4", new[] { Category.B }, "deck_category_b_mp4.apkg"),
-    new("Prawo jazdy - kategoria A - mp4", new[] { Category.A }, "deck_category_a_mp4.apkg")
-};
+    var xlsxParser = new XlsxParser();
+    var questions = xlsxParser.Parse(options.DatabasePath);
 
-var missingQuestionIds = missing
-    .Select(x => x.QuestionId)
-    .ToHashSet();
+    var totalQuestionCount = questions.Count;
 
-foreach (var (deckName, category, fileName) in exports)
-{
-    var selectedItems = items
-        .Where(x => x.Category.Any(y => category.Contains(y)))
-        .Where(x => missingQuestionIds.Contains(x.QuestionId) is false)
+    questions = DeleteQuestionsWithNoResources(questions, options.MediaDirectory);
+
+    var apkgFullPath = Path.Combine(options.OutputDirectory, $"{options.DeckName}.apkg");
+    var apkgResourceDictionary = Path.Combine(options.OutputDirectory, $"{options.DeckName}_collection.media");
+
+    Console.WriteLine($"Exporting {options.DeckName} questions to {apkgFullPath}...");
+
+    var selectedQuestions = questions
+        .Where(x => x.Categories.Any(y => options.Categories.Contains(y)))
         .ToArray();
 
-    var converter = new ItemToAnkiConverter(deckName);
-    await using var ms = await converter.Convert(selectedItems);
-    await using var fileStream = new FileStream(fileName, FileMode.Create);
-    await ms.CopyToAsync(fileStream);
+    var converter = new ItemToAnkiConverter(options.DeckName);
+    await using var stream = await converter.Convert(selectedQuestions);
+    await using var fileStream = new FileStream(apkgFullPath, FileMode.Create);
+    await stream.CopyToAsync(fileStream);
 
-    var resDir = $"{deckName}_collection.media";
+    var resources = selectedQuestions
+        .Where(x => !string.IsNullOrEmpty(x.MediaName))
+        .Select(x => new
+        {
+            Source = Path.Combine(options.MediaDirectory, x.MediaName),
+            Destination = Path.Combine(apkgResourceDictionary, x.MediaName)
+        })
+        .ToArray();
 
-    
-    var res = selectedItems.Where(x => !string.IsNullOrEmpty(x.MediaName)).Select(x => new
+    if (!Directory.Exists(apkgResourceDictionary))
     {
-        Src = Path.Combine(resourcesPath, x.MediaName),
-        Dst = Path.Combine(resDir, x.MediaName)
-    }).ToArray();
-
-    if (!Directory.Exists(resDir))
-    {
-        Directory.CreateDirectory(resDir);
+        Directory.CreateDirectory(apkgResourceDictionary);
     }
-    
-    foreach (var item in res)
+
+    Console.WriteLine($"Exporting {options.DeckName} media to {apkgResourceDictionary}...");
+
+    foreach (var resource in resources)
     {
-        File.Copy(item.Src, item.Dst, true);
+        File.Copy(resource.Source, resource.Destination, true);
     }
-    
-    Console.WriteLine($"Exported {deckName} | {selectedItems.Length}/{items.Length} | TotalLines: {lines.Length}");
+
+    Console.WriteLine($"Exported {selectedQuestions.Length} questions out of {totalQuestionCount}.");
+    Console.WriteLine("Exporting completed.");
 }
 
-Console.WriteLine("Done");
+static IReadOnlyCollection<Question> DeleteQuestionsWithNoResources(
+    IReadOnlyCollection<Question> questions,
+    string resourcesPath)
+{
+    var questionWithNoResources = GetQuestionWithNoResources(questions, resourcesPath);
 
-static IReadOnlyCollection<Item> GetMissingResources(IReadOnlyCollection<Item> items, string resourcesPath)
+    if (questionWithNoResources.Count > 0)
+    {
+        Console.WriteLine(
+            $"{questionWithNoResources.Count} questions with missing resources were found. These question will be skipped. ");
+
+        var questionWithNoResourcesIds = questionWithNoResources
+            .Select(x => x.Id)
+            .ToHashSet();
+
+        questions = questions
+            .Where(x => questionWithNoResourcesIds.Contains(x.Id) is false)
+            .ToArray();
+    }
+
+    return questions;
+}
+
+static IReadOnlyCollection<Question> GetQuestionWithNoResources(
+    IReadOnlyCollection<Question> items,
+    string resourcesPath)
 {
     var resourceNames = items
         .Where(x => string.IsNullOrEmpty(x.MediaName) is false)

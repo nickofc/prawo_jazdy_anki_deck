@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using AnkiNet;
 
 namespace Prawko;
@@ -11,11 +13,30 @@ public class ItemToAnkiConverter
         _deckName = deckName;
     }
 
-    public async Task<Stream> Convert(IReadOnlyList<Item> items)
+    public async Task<Stream> Convert(IReadOnlyList<Question> questions)
     {
         var collection = new AnkiCollection();
 
-        var noteType = new AnkiNoteType(
+        var noteType = GetAnkiNoteType();
+
+        var noteTypeId = collection.CreateNoteType(noteType);
+        var deckId = collection.CreateDeck(_deckName);
+        
+        foreach (var question in questions)
+        {
+            var (front, back) = Convert(question);
+            collection.CreateNote(deckId, noteTypeId, front, back);
+        }
+
+        var memoryStream = new MemoryStream();
+        await AnkiFileWriter.WriteToStreamAsync(memoryStream, collection);
+        memoryStream.Position = 0;
+        return memoryStream;
+    }
+    
+    private AnkiNoteType GetAnkiNoteType()
+    {
+        return new AnkiNoteType(
             name: $"Basic_{_deckName}",
             cardTypes:
             [
@@ -28,23 +49,54 @@ public class ItemToAnkiConverter
             ],
             fieldNames: ["Front", "Back"]
         );
+    }
 
-        var noteTypeId = collection.CreateNoteType(noteType);
-        var deckId = collection.CreateDeck(_deckName);
+    private (string front, string back) Convert(Question question)
+    {
+        var sb = new StringBuilder();
 
-        var converter = new ItemToHtmlConverter();
+        sb.AppendLine("<div>");
+        sb.AppendLine($"<h2>{question.Value}</h2>");
 
-        foreach (var item in items)
+        if (!string.IsNullOrEmpty(question.MediaName))
         {
-            var front = converter.Convert(item);
-            var back = item.Answer;
-            
-            collection.CreateNote(deckId, noteTypeId, front, back);
+            var isImage = question.MediaName.EndsWith(".jpg", StringComparison.InvariantCultureIgnoreCase);
+            var isVideo = question.MediaName.EndsWith(".wmv", StringComparison.InvariantCultureIgnoreCase);
+
+            if (isImage)
+            {
+                sb.AppendLine($"<img src=\"{question.MediaName}\">");
+            }
+            else if (isVideo)
+            {
+                sb.AppendLine($"[sound:{question.MediaName.Replace(".wmv", 
+                    ".mp4", StringComparison.InvariantCultureIgnoreCase)}]");
+            }
         }
 
-        var memoryStream = new MemoryStream();
-        await AnkiFileWriter.WriteToStreamAsync(memoryStream, collection);
-        memoryStream.Position = 0;
-        return memoryStream;
+        // TODO: testy ABC powinny zmieniać kolejność!
+        
+        if (!string.IsNullOrEmpty(question.AnswerA))
+        {
+            sb.AppendLine($"<p><strong>A</strong>: {question.AnswerA}</p>");
+        }
+
+        if (!string.IsNullOrEmpty(question.AnswerB))
+        {
+            sb.AppendLine($"<p><strong>B</strong>: {question.AnswerB}</p>");
+        }
+
+        if (!string.IsNullOrEmpty(question.AnswerC))
+        {
+            sb.AppendLine($"<p><strong>C</strong>: {question.AnswerC}</p>");
+        }
+
+        sb.AppendLine("<div style=\"display:none\">");
+        sb.AppendLine(JsonSerializer.Serialize(question));
+        sb.AppendLine("</div>");
+
+        sb.AppendLine("</div>");
+
+        return (sb.ToString(), question.Answer);
     }
 }
